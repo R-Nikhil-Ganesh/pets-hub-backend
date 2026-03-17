@@ -22,6 +22,32 @@ router.get('/me', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/me/posts
+router.get('/me/posts', verifyToken, async (req, res) => {
+  const page = Number(req.query.page) || 1;
+  const limit = 12;
+  const offset = (page - 1) * limit;
+  try {
+    const [posts] = await db.query(
+      `SELECT p.*, u.username, u.display_name, u.avatar_url,
+              pp.name AS pet_name, pp.breed AS pet_breed, pp.age AS pet_age, pp.photo_url AS pet_photo_url,
+              (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id) AS reaction_count,
+              (SELECT COUNT(*) FROM comments WHERE post_id = p.id) AS comment_count,
+              (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id AND user_id = ?) AS user_reacted
+       FROM posts p
+       JOIN users u ON u.id = p.user_id
+       LEFT JOIN pet_profiles pp ON pp.id = p.pet_id
+       WHERE p.user_id = ? AND p.deleted_at IS NULL
+       ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+      [req.user.id, req.user.id, limit, offset]
+    );
+    res.json({ posts: posts.map(shapePost) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch posts' });
+  }
+});
+
 // PUT /api/users/me — update display_name / bio / avatar
 router.put('/me', verifyToken, upload.single('avatar'), async (req, res) => {
   try {

@@ -11,7 +11,8 @@ router.get('/', verifyToken, async (req, res) => {
     const [rows] = await db.query(
       `SELECT ht.*, u.username, u.display_name, u.avatar_url,
               (SELECT COUNT(*) FROM hot_take_upvotes WHERE hot_take_id = ht.id) AS upvotes,
-              (SELECT COUNT(*) FROM hot_take_upvotes WHERE hot_take_id = ht.id AND user_id = ?) AS user_upvoted
+              (SELECT COUNT(*) FROM hot_take_upvotes WHERE hot_take_id = ht.id AND user_id = ?) AS user_upvoted,
+              0 AS comment_count
        FROM hot_takes ht JOIN users u ON u.id = ht.user_id
        WHERE ht.deleted_at IS NULL
        ORDER BY upvotes DESC, ht.created_at DESC

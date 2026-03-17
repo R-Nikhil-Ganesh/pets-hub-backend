@@ -100,40 +100,56 @@ function initSocket(server) {
     });
   });
 
-  // Subscribe to Redis pub/sub for trivia matchmaking events
+  // Subscribe to Redis pub/sub for trivia matchmaking events.
   const subscriber = redis.duplicate();
-  subscriber.connect().then(() => {
-    subscriber.subscribe('game:start', (message) => {
-      try {
-        const data = JSON.parse(message);
-        const { session_id, player1_id, player2_id, questions } = data;
-
-        // Fetch socket for each player and notify
-        const formatQuestions = questions.map((q) => ({
-          id: q.id,
-          question: q.question,
-          choices: [q.choice_a, q.choice_b, q.choice_c, q.choice_d],
-          correct_index: q.correct_index,
-          category: q.category,
-        }));
-
-        // Find sockets belonging to player1 and player2
-        io.sockets.sockets.forEach((s) => {
-          if (s.user?.id === player1_id || s.user?.id === player2_id) {
-            const opponentId = s.user.id === player1_id ? player2_id : player1_id;
-            s.join(`game:${session_id}`);
-            s.emit('game:start', {
-              session_id,
-              opponent: { id: opponentId },
-              questions: formatQuestions,
-            });
-          }
-        });
-      } catch (err) {
-        console.error('game:start sub error', err);
-      }
-    });
+  subscriber.on('error', (err) => {
+    console.error('Redis subscriber error:', err?.message || err);
   });
+
+  const subscribeGameStart = async () => {
+    try {
+      if (!subscriber.isOpen) {
+        await subscriber.connect();
+      }
+
+      await subscriber.subscribe('game:start', (message) => {
+        try {
+          const data = JSON.parse(message);
+          const { session_id, player1_id, player2_id, questions } = data;
+
+          const formatQuestions = questions.map((q) => ({
+            id: q.id,
+            question: q.question,
+            options: [q.choice_a, q.choice_b, q.choice_c, q.choice_d],
+            correct_index: q.correct_index,
+            time_limit: 20,
+            category: q.category,
+          }));
+
+          io.sockets.sockets.forEach((s) => {
+            if (s.user?.id === player1_id || s.user?.id === player2_id) {
+              const opponentId = s.user.id === player1_id ? player2_id : player1_id;
+              s.join(`game:${session_id}`);
+              s.emit('game:start', {
+                session_id,
+                opponent: { id: opponentId },
+                questions: formatQuestions,
+              });
+            }
+          });
+        } catch (err) {
+          console.error('game:start sub handler error', err);
+        }
+      });
+
+      console.log('Redis subscriber connected: game:start');
+    } catch (err) {
+      console.error('Redis subscriber connect/subscribe failed:', err?.message || err);
+      setTimeout(subscribeGameStart, 5000);
+    }
+  };
+
+  subscribeGameStart();
 
   return io;
 }

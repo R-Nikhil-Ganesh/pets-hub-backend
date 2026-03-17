@@ -8,7 +8,7 @@ router.get('/', verifyToken, async (req, res) => {
   try {
     const [stories] = await db.query(
       `SELECT s.*, u.username, u.display_name, u.avatar_url,
-              pp.name AS pet_name,
+              pp.name AS pet_name, pp.breed AS pet_breed, pp.age AS pet_age, pp.photo_url AS pet_photo_url,
               (SELECT COUNT(*) FROM story_views sv WHERE sv.story_id = s.id AND sv.user_id = ?) AS viewed
        FROM stories s
        JOIN users u ON u.id = s.user_id
@@ -18,7 +18,18 @@ router.get('/', verifyToken, async (req, res) => {
       [req.user.id, req.user.id]
     );
     res.json({
-      stories: stories.map((s) => ({ ...s, viewed: Number(s.viewed) > 0 })),
+      stories: stories.map((s) => ({
+        ...s,
+        pet: s.pet_name
+          ? {
+              name: s.pet_name,
+              breed: s.pet_breed || '',
+              age: Number(s.pet_age) || 0,
+              photo_url: s.pet_photo_url || '',
+            }
+          : null,
+        viewed: Number(s.viewed) > 0,
+      })),
     });
   } catch (err) {
     console.error(err);
@@ -30,7 +41,8 @@ router.get('/', verifyToken, async (req, res) => {
 router.get('/:id', verifyToken, async (req, res) => {
   try {
     const [[story]] = await db.query(
-      `SELECT s.*, u.username, u.display_name, u.avatar_url, pp.name AS pet_name
+      `SELECT s.*, u.username, u.display_name, u.avatar_url,
+              pp.name AS pet_name, pp.breed AS pet_breed, pp.age AS pet_age, pp.photo_url AS pet_photo_url
        FROM stories s JOIN users u ON u.id = s.user_id
        LEFT JOIN pet_profiles pp ON pp.id = s.pet_id
        WHERE s.id = ? AND s.deleted_at IS NULL`,
@@ -60,8 +72,12 @@ router.post('/', verifyToken, upload.single('media'), async (req, res) => {
       [req.user.id, pet_id || null, media_url, mediaType, expires_at]
     );
     const [[story]] = await db.query(
-      `SELECT s.*, u.username, u.display_name, u.avatar_url
-       FROM stories s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
+      `SELECT s.*, u.username, u.display_name, u.avatar_url,
+              pp.name AS pet_name, pp.breed AS pet_breed, pp.age AS pet_age, pp.photo_url AS pet_photo_url
+       FROM stories s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN pet_profiles pp ON pp.id = s.pet_id
+       WHERE s.id = ?`,
       [result.insertId]
     );
     res.status(201).json({ story });
