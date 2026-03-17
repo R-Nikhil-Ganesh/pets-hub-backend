@@ -59,8 +59,13 @@ router.get('/:id', verifyToken, async (req, res) => {
 // POST /api/stories — create story
 router.post('/', verifyToken, upload.single('media'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Media is required' });
+
   try {
-    const mediaType = req.file.mimetype.startsWith('video') ? 'video' : 'image';
+    if (!req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: 'Uploaded media file is empty' });
+    }
+
+    const mediaType = req.file.mimetype?.startsWith('video') ? 'video' : 'image';
     const resourceType = mediaType === 'video' ? 'video' : 'image';
     const media_url = await uploadStream(req.file.buffer, 'pawprint/stories', resourceType);
     const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -82,8 +87,8 @@ router.post('/', verifyToken, upload.single('media'), async (req, res) => {
     );
     res.status(201).json({ story });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to create story' });
+    console.error('create story failed:', err);
+    res.status(500).json({ error: err?.message || 'Failed to create story' });
   }
 });
 
