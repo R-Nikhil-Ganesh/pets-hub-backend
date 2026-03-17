@@ -2,6 +2,7 @@ const router = require('express').Router();
 const db = require('../config/db');
 const { verifyToken } = require('../middleware/auth');
 const { upload, uploadStream } = require('../middleware/upload');
+const { emitToUser } = require('../socket');
 
 // GET /api/posts/:id
 router.get('/:id', verifyToken, async (req, res) => {
@@ -83,6 +84,14 @@ router.post('/:id/react', verifyToken, async (req, res) => {
     const postId = req.params.id;
     const userId = req.user.id;
     const emoji = req.body.emoji || '🐾';
+    const [[postOwner]] = await db.query(
+      'SELECT user_id FROM posts WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+      [postId]
+    );
+
+    if (!postOwner) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
 
     const [[existing]] = await db.query(
       'SELECT id FROM post_reactions WHERE post_id = ? AND user_id = ? LIMIT 1',
@@ -90,6 +99,10 @@ router.post('/:id/react', verifyToken, async (req, res) => {
     );
     if (existing) {
       await db.query('DELETE FROM post_reactions WHERE post_id = ? AND user_id = ?', [postId, userId]);
+      const deletedNotificationId = await deleteNotification(postOwner.user_id, userId, 'like', postId, 'post');
+      if (deletedNotificationId) {
+        emitToUser(postOwner.user_id, 'notification:remove', { id: deletedNotificationId });
+      }
       res.json({ reacted: false });
     } else {
       await db.query(
@@ -97,6 +110,10 @@ router.post('/:id/react', verifyToken, async (req, res) => {
         [postId, userId, emoji]
       );
       await awardPoints(userId, 1, 'reacted_to_post');
+      const notification = await createNotification(postOwner.user_id, userId, 'like', postId, 'post');
+      if (notification) {
+        emitToUser(postOwner.user_id, 'notification:new', { notification });
+      }
       res.json({ reacted: true });
     }
   } catch (err) {
@@ -110,11 +127,24 @@ router.post('/:id/comments', verifyToken, async (req, res) => {
   const { content } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: 'Comment cannot be empty' });
   try {
+    const [[postOwner]] = await db.query(
+      'SELECT user_id FROM posts WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+      [req.params.id]
+    );
+
+    if (!postOwner) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
     const [result] = await db.query(
       'INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)',
       [req.params.id, req.user.id, content.trim()]
     );
     await awardPoints(req.user.id, 3, 'commented');
+    const notification = await createNotification(postOwner.user_id, req.user.id, 'comment', req.params.id, 'post');
+    if (notification) {
+      emitToUser(postOwner.user_id, 'notification:new', { notification });
+    }
     const [[comment]] = await db.query(
       `SELECT c.*, u.username, u.display_name, u.avatar_url
        FROM comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?`,
@@ -152,6 +182,73 @@ async function awardPoints(userId, amount, action) {
     'INSERT INTO point_transactions (user_id, amount, action) VALUES (?, ?, ?)',
     [userId, amount, action]
   );
+}
+
+async function createNotification(userId, actorId, type, refId, refType) {
+  if (!userId || !actorId || Number(userId) === Number(actorId)) return;
+
+  const [result] = await db.query(
+    `INSERT INTO notifications (user_id, actor_id, type, ref_id, ref_type)
+     VALUES (?, ?, ?, ?, ?)`,
+    [userId, actorId, type, refId, refType]
+  );
+
+  const [[notification]] = await db.query(
+    `SELECT n.id, n.user_id, n.actor_id, n.type, n.ref_id, n.ref_type, n.is_read, n.created_at,
+            u.username AS actor_username, u.display_name AS actor_display_name, u.avatar_url AS actor_avatar_url,
+            p.caption AS post_caption, p.media_url AS post_media_url
+     FROM notifications n
+     LEFT JOIN users u ON u.id = n.actor_id
+     LEFT JOIN posts p ON p.id = n.ref_id AND n.ref_type = 'post'
+     WHERE n.id = ?
+     LIMIT 1`,
+    [result.insertId]
+  );
+
+  return notification ? shapeNotification(notification) : null;
+}
+
+async function deleteNotification(userId, actorId, type, refId, refType) {
+  const [[existing]] = await db.query(
+    `SELECT id FROM notifications
+     WHERE user_id = ? AND actor_id = ? AND type = ? AND ref_id = ? AND ref_type = ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId, actorId, type, refId, refType]
+  );
+
+  if (!existing) return null;
+
+  await db.query('DELETE FROM notifications WHERE id = ?', [existing.id]);
+  return existing.id;
+}
+
+function shapeNotification(row) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    actor_id: row.actor_id,
+    type: row.type,
+    ref_id: row.ref_id,
+    ref_type: row.ref_type,
+    is_read: Boolean(row.is_read),
+    created_at: row.created_at,
+    actor: row.actor_id
+      ? {
+          id: row.actor_id,
+          username: row.actor_username,
+          display_name: row.actor_display_name,
+          avatar_url: row.actor_avatar_url,
+        }
+      : null,
+    post: row.ref_type === 'post'
+      ? {
+          id: row.ref_id,
+          caption: row.post_caption,
+          media_url: row.post_media_url,
+        }
+      : null,
+  };
 }
 
 function shapePost(row) {

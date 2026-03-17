@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const ChatMessage = require('./models/ChatMessage');
 const { client: redis } = require('./config/redis');
+const db = require('./config/db');
 
 let io;
 
@@ -28,6 +29,8 @@ function initSocket(server) {
     const userId = socket.user.id;
     const username = socket.user.username;
 
+    socket.join(`user:${userId}`);
+
     // --- Community chat ---
     socket.on('join:community', (communityId) => {
       socket.join(`community:${communityId}`);
@@ -42,18 +45,35 @@ function initSocket(server) {
       if (!community_id) return;
 
       try {
+        // Fetch user's display_name
+        const [[user]] = await db.query('SELECT display_name, avatar_url FROM users WHERE id = ?', [userId]);
+        if (!user) return;
+
         const msg = await ChatMessage.create({
           community_id: Number(community_id),
           sender_id: userId,
           sender_username: username,
-          sender_avatar_url: socket.user.avatar_url || '',
+          sender_display_name: user.display_name,
+          sender_avatar: user.avatar_url || '',
           type,
           content: content?.trim() || '',
           media_url,
-          reply_to: reply_to || {},
+          reply_to: reply_to || null,
+          reply_preview: null,
         });
 
-        io.to(`community:${community_id}`).emit('chat:message', msg.toObject());
+        const msgObj = msg.toObject();
+        // Format reactions for emission
+        const formattedMsg = {
+          ...msgObj,
+          reactions: (msgObj.reactions || []).map((r) => ({
+            emoji: r.emoji,
+            count: r.count || 1,
+            user_reacted: Array.isArray(r.user_ids) && r.user_ids.includes(userId),
+          })),
+        };
+
+        io.to(`community:${community_id}`).emit('chat:message', formattedMsg);
       } catch (err) {
         console.error('chat:send error', err);
         socket.emit('chat:error', { message: 'Failed to send message' });
@@ -64,16 +84,40 @@ function initSocket(server) {
       try {
         const msg = await ChatMessage.findById(message_id);
         if (!msg) return;
-        const existing = msg.reactions.find((r) => r.user_id === userId && r.emoji === emoji);
-        if (existing) {
-          msg.reactions = msg.reactions.filter((r) => !(r.user_id === userId && r.emoji === emoji));
+        
+        const reactionIdx = msg.reactions.findIndex((r) => r.emoji === emoji);
+        if (reactionIdx >= 0) {
+          const reaction = msg.reactions[reactionIdx];
+          const userIdx = reaction.user_ids.indexOf(userId);
+          if (userIdx >= 0) {
+            // User already reacted, remove reaction
+            reaction.user_ids.splice(userIdx, 1);
+            reaction.count--;
+            if (reaction.count === 0) {
+              msg.reactions.splice(reactionIdx, 1);
+            }
+          } else {
+            // Add user to reaction
+            reaction.user_ids.push(userId);
+            reaction.count++;
+          }
         } else {
-          msg.reactions.push({ user_id: userId, emoji });
+          // New reaction
+          msg.reactions.push({ emoji, count: 1, user_ids: [userId] });
         }
+        
         await msg.save();
+        
+        // Format reactions for client
+        const formattedReactions = msg.reactions.map((r) => ({
+          emoji: r.emoji,
+          count: r.count,
+          user_reacted: r.user_ids.includes(userId),
+        }));
+        
         io.to(`community:${msg.community_id}`).emit('chat:reaction', {
           message_id,
-          reactions: msg.reactions,
+          reactions: formattedReactions,
         });
       } catch (err) {
         console.error('chat:react error', err);
@@ -154,4 +198,9 @@ function initSocket(server) {
   return io;
 }
 
-module.exports = { initSocket };
+function emitToUser(userId, event, payload) {
+  if (!io || !userId) return;
+  io.to(`user:${userId}`).emit(event, payload);
+}
+
+module.exports = { initSocket, emitToUser };
