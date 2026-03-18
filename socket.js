@@ -3,8 +3,87 @@ const jwt = require('jsonwebtoken');
 const ChatMessage = require('./models/ChatMessage');
 const { client: redis } = require('./config/redis');
 const db = require('./config/db');
+const { canUserAccessCommunity } = require('./utils/communityAccess');
 
 let io;
+
+function toObjectIdString(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null && typeof value.toString === 'function') {
+    return value.toString();
+  }
+  return null;
+}
+
+function normalizeMessageReactions(message) {
+  const aggregated = new Map();
+
+  for (const reaction of Array.isArray(message.reactions) ? message.reactions : []) {
+    const emoji = String(reaction.emoji || '').trim();
+    if (!emoji) continue;
+
+    if (!aggregated.has(emoji)) {
+      aggregated.set(emoji, new Set());
+    }
+
+    const bucket = aggregated.get(emoji);
+    if (Array.isArray(reaction.user_ids)) {
+      reaction.user_ids.forEach((id) => bucket.add(Number(id)));
+    } else if (reaction.user_id != null) {
+      bucket.add(Number(reaction.user_id));
+    }
+  }
+
+  message.reactions = Array.from(aggregated.entries()).map(([emoji, users]) => ({
+    emoji,
+    count: users.size,
+    user_ids: Array.from(users).filter((id) => Number.isFinite(id)),
+  }));
+}
+
+async function getReactionUsersMap(userIds) {
+  const normalized = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (normalized.length === 0) return new Map();
+
+  const [rows] = await db.query(
+    'SELECT id, username, display_name FROM users WHERE id IN (?)',
+    [normalized]
+  );
+  const map = new Map();
+  rows.forEach((row) => {
+    map.set(Number(row.id), {
+      id: Number(row.id),
+      username: row.username,
+      display_name: row.display_name || row.username,
+    });
+  });
+  return map;
+}
+
+function formatReactionsForClient(reactions, currentUserId, usersMap) {
+  return (Array.isArray(reactions) ? reactions : []).map((reaction) => {
+    const userIds = Array.isArray(reaction.user_ids)
+      ? reaction.user_ids.filter((id) => Number.isFinite(Number(id)) && Number(id) > 0).map(Number)
+      : [];
+
+    return {
+      emoji: reaction.emoji,
+      count: userIds.length,
+      user_reacted: userIds.includes(Number(currentUserId)),
+      user_ids: userIds,
+      users: userIds.map((id) => {
+        const user = usersMap.get(id);
+        return {
+          id,
+          username: user?.username || `user${id}`,
+          display_name: user?.display_name || user?.username || `User ${id}`,
+          is_self: id === Number(currentUserId),
+        };
+      }),
+    };
+  });
+}
 
 function initSocket(server) {
   io = new Server(server, {
@@ -32,8 +111,25 @@ function initSocket(server) {
     socket.join(`user:${userId}`);
 
     // --- Community chat ---
-    socket.on('join:community', (communityId) => {
-      socket.join(`community:${communityId}`);
+    socket.on('join:community', async (communityId) => {
+      const parsedCommunityId = Number(communityId);
+      if (!Number.isFinite(parsedCommunityId) || parsedCommunityId <= 0) return;
+
+      try {
+        const access = await canUserAccessCommunity(userId, parsedCommunityId);
+        if (!access.exists || !access.allowed) {
+          socket.emit('chat:error', {
+            message: access.exists
+              ? `Access denied: this community requires a ${access.requiredSpecies} pet profile`
+              : 'Community not found',
+          });
+          return;
+        }
+
+        socket.join(`community:${parsedCommunityId}`);
+      } catch (err) {
+        console.error('join:community error', err);
+      }
     });
 
     socket.on('leave:community', (communityId) => {
@@ -41,31 +137,61 @@ function initSocket(server) {
     });
 
     socket.on('chat:send', async (payload) => {
-      const { community_id, content, type = 'text', media_url = '', reply_to } = payload;
+      const {
+        community_id,
+        content,
+        type = 'text',
+        media_url = '',
+        reply_to,
+        reply_preview,
+      } = payload;
       if (!community_id) return;
 
       try {
+        const parsedCommunityId = Number(community_id);
+        if (!Number.isFinite(parsedCommunityId) || parsedCommunityId <= 0) return;
+
+        const access = await canUserAccessCommunity(userId, parsedCommunityId);
+        if (!access.exists || !access.allowed) {
+          socket.emit('chat:error', {
+            message: access.exists
+              ? `Access denied: this community requires a ${access.requiredSpecies} pet profile`
+              : 'Community not found',
+          });
+          return;
+        }
+
         // Fetch user's display_name
         const [[user]] = await db.query('SELECT display_name, avatar_url FROM users WHERE id = ?', [userId]);
         if (!user) return;
 
         const msg = await ChatMessage.create({
-          community_id: Number(community_id),
+          community_id: parsedCommunityId,
           sender_id: userId,
           sender_username: username,
-          sender_display_name: user.display_name,
+          sender_display_name: user.display_name || username,
           sender_avatar: user.avatar_url || '',
           type,
           content: content?.trim() || '',
           media_url,
-          reply_to: reply_to || null,
-          reply_preview: null,
+          reply_to: toObjectIdString(reply_to),
+          reply_preview: String(reply_preview || '').trim() || null,
         });
 
         const msgObj = msg.toObject();
         // Format reactions for emission
         const formattedMsg = {
           ...msgObj,
+          sender_display_name: msgObj.sender_display_name || msgObj.sender_username || 'Unknown',
+          reply_to:
+            typeof msgObj.reply_to === 'string'
+              ? msgObj.reply_to
+              : msgObj.reply_to?.message_id
+                ? String(msgObj.reply_to.message_id)
+                : null,
+          reply_preview:
+            msgObj.reply_preview ||
+            (msgObj.reply_to?.content_preview ? String(msgObj.reply_to.content_preview) : null),
           reactions: (msgObj.reactions || []).map((r) => ({
             emoji: r.emoji,
             count: r.count || 1,
@@ -73,7 +199,7 @@ function initSocket(server) {
           })),
         };
 
-        io.to(`community:${community_id}`).emit('chat:message', formattedMsg);
+        io.to(`community:${parsedCommunityId}`).emit('chat:message', formattedMsg);
       } catch (err) {
         console.error('chat:send error', err);
         socket.emit('chat:error', { message: 'Failed to send message' });
@@ -82,38 +208,54 @@ function initSocket(server) {
 
     socket.on('chat:react', async ({ message_id, emoji }) => {
       try {
+        const emojiValue = String(emoji || '').trim();
+        if (!emojiValue) return;
+
         const msg = await ChatMessage.findById(message_id);
         if (!msg) return;
+
+        const access = await canUserAccessCommunity(userId, Number(msg.community_id));
+        if (!access.exists || !access.allowed) return;
+
+        normalizeMessageReactions(msg);
         
-        const reactionIdx = msg.reactions.findIndex((r) => r.emoji === emoji);
-        if (reactionIdx >= 0) {
-          const reaction = msg.reactions[reactionIdx];
-          const userIdx = reaction.user_ids.indexOf(userId);
+        // Enforce one emoji per user: remove user from all existing reactions first.
+        for (let i = msg.reactions.length - 1; i >= 0; i -= 1) {
+          const reaction = msg.reactions[i];
+          const userIds = Array.isArray(reaction.user_ids) ? reaction.user_ids.map(Number) : [];
+          const userIdx = userIds.indexOf(userId);
           if (userIdx >= 0) {
-            // User already reacted, remove reaction
-            reaction.user_ids.splice(userIdx, 1);
-            reaction.count--;
-            if (reaction.count === 0) {
-              msg.reactions.splice(reactionIdx, 1);
-            }
-          } else {
-            // Add user to reaction
-            reaction.user_ids.push(userId);
-            reaction.count++;
+            userIds.splice(userIdx, 1);
           }
+          reaction.user_ids = userIds;
+          reaction.count = userIds.length;
+          if (reaction.count <= 0) {
+            msg.reactions.splice(i, 1);
+          }
+        }
+
+        const targetIdx = msg.reactions.findIndex((r) => r.emoji === emojiValue);
+        if (targetIdx >= 0) {
+          const target = msg.reactions[targetIdx];
+          const userIds = Array.isArray(target.user_ids) ? target.user_ids.map(Number) : [];
+          if (!userIds.includes(userId)) {
+            userIds.push(userId);
+          }
+          target.user_ids = userIds;
+          target.count = userIds.length;
         } else {
-          // New reaction
-          msg.reactions.push({ emoji, count: 1, user_ids: [userId] });
+          msg.reactions.push({ emoji: emojiValue, count: 1, user_ids: [userId] });
         }
         
         await msg.save();
+
+        const reactionUserIds = msg.reactions.flatMap((reaction) =>
+          Array.isArray(reaction.user_ids) ? reaction.user_ids : []
+        );
+        const usersMap = await getReactionUsersMap(reactionUserIds);
         
         // Format reactions for client
-        const formattedReactions = msg.reactions.map((r) => ({
-          emoji: r.emoji,
-          count: r.count,
-          user_reacted: r.user_ids.includes(userId),
-        }));
+        const formattedReactions = formatReactionsForClient(msg.reactions, userId, usersMap);
         
         io.to(`community:${msg.community_id}`).emit('chat:reaction', {
           message_id,

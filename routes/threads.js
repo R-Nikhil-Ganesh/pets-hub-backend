@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const db = require('../config/db');
 const { verifyToken } = require('../middleware/auth');
+const { canUserAccessCommunity } = require('../utils/communityAccess');
 
 // GET /api/threads?community_id=&page=1
 router.get('/', verifyToken, async (req, res) => {
@@ -9,6 +10,14 @@ router.get('/', verifyToken, async (req, res) => {
   const limit = 20;
   const offset = (Number(page) - 1) * limit;
   try {
+    const access = await canUserAccessCommunity(req.user.id, Number(community_id));
+    if (!access.exists) return res.status(404).json({ error: 'Community not found' });
+    if (!access.allowed) {
+      return res.status(403).json({
+        error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+      });
+    }
+
     const [threads] = await db.query(
       `SELECT t.*, u.username, u.display_name, u.avatar_url,
               u.is_professional, u.professional_type,
@@ -42,6 +51,13 @@ router.get('/:id', verifyToken, async (req, res) => {
       [req.user.id, req.params.id]
     );
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    const access = await canUserAccessCommunity(req.user.id, Number(thread.community_id));
+    if (!access.allowed) {
+      return res.status(403).json({
+        error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+      });
+    }
 
     const [replies] = await db.query(
       `SELECT r.*, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type,
@@ -79,6 +95,14 @@ router.post('/', verifyToken, async (req, res) => {
   const { community_id, title, content, flair } = req.body;
   if (!community_id || !title?.trim()) return res.status(400).json({ error: 'community_id and title required' });
   try {
+    const access = await canUserAccessCommunity(req.user.id, Number(community_id));
+    if (!access.exists) return res.status(404).json({ error: 'Community not found' });
+    if (!access.allowed) {
+      return res.status(403).json({
+        error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+      });
+    }
+
     const [result] = await db.query(
       'INSERT INTO threads (community_id, user_id, title, content, flair) VALUES (?, ?, ?, ?, ?)',
       [community_id, req.user.id, title.trim(), content?.trim() || '', flair || null]
@@ -97,6 +121,16 @@ router.post('/:id/replies', verifyToken, async (req, res) => {
   const { content, parent_id, parent_reply_id } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: 'Content required' });
   try {
+    const [[thread]] = await db.query('SELECT id, community_id FROM threads WHERE id = ?', [req.params.id]);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    const access = await canUserAccessCommunity(req.user.id, Number(thread.community_id));
+    if (!access.allowed) {
+      return res.status(403).json({
+        error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+      });
+    }
+
     const [result] = await db.query(
       'INSERT INTO thread_replies (thread_id, user_id, parent_id, content) VALUES (?, ?, ?, ?)',
       [req.params.id, req.user.id, parent_id || parent_reply_id || null, content.trim()]
@@ -118,6 +152,31 @@ router.post('/:id/replies', verifyToken, async (req, res) => {
 router.post('/:id/vote', verifyToken, async (req, res) => {
   const { is_upvote = true, reply_id } = req.body || {};
   try {
+    if (reply_id) {
+      const [[reply]] = await db.query(
+        'SELECT r.id, t.community_id FROM thread_replies r JOIN threads t ON t.id = r.thread_id WHERE r.id = ?',
+        [reply_id]
+      );
+      if (!reply) return res.status(404).json({ error: 'Reply not found' });
+
+      const access = await canUserAccessCommunity(req.user.id, Number(reply.community_id));
+      if (!access.allowed) {
+        return res.status(403).json({
+          error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+        });
+      }
+    } else {
+      const [[thread]] = await db.query('SELECT id, community_id FROM threads WHERE id = ?', [req.params.id]);
+      if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+      const access = await canUserAccessCommunity(req.user.id, Number(thread.community_id));
+      if (!access.allowed) {
+        return res.status(403).json({
+          error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+        });
+      }
+    }
+
     const id = reply_id ?? req.params.id;
     await db.query(
       `INSERT INTO thread_upvotes (thread_id, reply_id, user_id, is_upvote) VALUES (?, ?, ?, ?)

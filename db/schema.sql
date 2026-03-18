@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS communities (
   description  TEXT,
   type         ENUM('breed','topic','local') NOT NULL DEFAULT 'topic',
   icon_emoji   VARCHAR(10) DEFAULT '🐾',
+  icon_url     VARCHAR(512) DEFAULT NULL,
   is_default   TINYINT(1) NOT NULL DEFAULT 0,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
@@ -340,13 +341,13 @@ CREATE TABLE IF NOT EXISTS notifications (
 -- -----------------------------------------------
 -- SEED: Default communities
 -- -----------------------------------------------
-INSERT IGNORE INTO communities (name, description, type, icon_emoji, is_default) VALUES
-  ('General Pet Talk',    'Chat about anything pet-related!', 'topic', '🐾', 1),
-  ('Dog Lovers',          'For all dog breeds and mixes',     'breed', '🐶', 1),
-  ('Cat Owners',          'From kittens to senior cats',      'breed', '🐱', 1),
-  ('Bird Enthusiasts',    'Parrots, canaries, and more',      'breed', '🦜', 0),
-  ('Vet Tips & Health',   'Professional advice & Q&A',        'topic', '💊', 1),
-  ('Training & Behavior', 'Tips, tricks & behaviour help',    'topic', '🎓', 0);
+INSERT IGNORE INTO communities (name, description, type, icon_emoji, icon_url, is_default) VALUES
+  ('General Pet Talk',    'Chat about anything pet-related!', 'topic', '🐾', 'https://i.pinimg.com/736x/15/24/5b/15245b93abd62b3392a99bfb1766d617.jpg', 1),
+  ('Dog Lovers',          'For all dog breeds and mixes',     'breed', '🐶', 'https://images.ctfassets.net/sfnkq8lmu5d7/1wwJDuKWXF4niMBJE9gaSH/97b11bcd7d41039f3a8eb5c3350acdfd/2024-05-24_Doge_meme_death_-_Hero.jpg', 1),
+  ('Cat Owners',          'From kittens to senior cats',      'breed', '🐱', 'https://stickerrs.com/cdn-cgi/image/format=auto,quality=80,width=300/wp-content/uploads/2024/03/Cat-Meme-Stickers-Featured-300x300.png', 1),
+  ('Bird Enthusiasts',    'Parrots, canaries, and more',      'breed', '🦜', NULL, 0),
+  ('Vet Tips & Health',   'Professional advice & Q&A',        'topic', '💊', 'https://media.makeameme.org/created/please-help-me-596e8b.jpg', 1),
+  ('Training & Behavior', 'Tips, tricks & behaviour help',    'topic', '🎓', NULL, 0);
 
 -- -----------------------------------------------
 -- SEED: Sample trivia questions
