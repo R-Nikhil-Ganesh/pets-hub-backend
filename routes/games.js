@@ -5,6 +5,13 @@ const { verifyToken } = require('../middleware/auth');
 const { upload, uploadStream } = require('../middleware/upload');
 
 const TRIVIA_QUEUE_KEY = 'trivia:queue';
+const DAILY_CHALLENGES = [
+  { id: 1, title: 'Post a photo of your pet', description: 'Share one new post today.', points: 10 },
+  { id: 2, title: 'Comment on 3 posts', description: 'Join the conversation on the feed.', points: 15 },
+  { id: 3, title: 'Play a trivia round', description: 'Jump into a live trivia match.', points: 20 },
+  { id: 4, title: 'Share a hot take', description: 'Post an opinion for the community.', points: 5 },
+  { id: 5, title: 'Upvote a community thread', description: 'Support a useful thread or reply.', points: 5 },
+];
 
 router.post('/trivia/queue', verifyToken, async (req, res) => {
   try {
@@ -17,6 +24,11 @@ router.post('/trivia/queue', verifyToken, async (req, res) => {
       await redis.zRem(TRIVIA_QUEUE_KEY, [String(player1Id), String(player2Id)]);
 
       const [questions] = await db.query('SELECT * FROM trivia_questions ORDER BY RAND() LIMIT 10');
+      const [players] = await db.query(
+        'SELECT id, username, display_name, avatar_url FROM users WHERE id IN (?, ?)',
+        [player1Id, player2Id]
+      );
+      const playerMap = Object.fromEntries(players.map((player) => [Number(player.id), player]));
       const [result] = await db.query(
         'INSERT INTO game_sessions (mode, player1_id, player2_id, status) VALUES (?, ?, ?, ?)',
         ['trivia', player1Id, player2Id, 'active']
@@ -28,6 +40,8 @@ router.post('/trivia/queue', verifyToken, async (req, res) => {
           session_id: result.insertId,
           player1_id: player1Id,
           player2_id: player2Id,
+          player1: playerMap[player1Id] || { id: player1Id },
+          player2: playerMap[player2Id] || { id: player2Id },
           questions,
         })
       );
@@ -99,22 +113,76 @@ router.get('/leaderboard', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/challenges', verifyToken, async (_req, res) => {
-  const challenges = [
-    { id: 1, title: 'Post a photo of your pet', description: 'Share one new post today.', points: 10, points_reward: 10, streak_count: 0, completed_today: false, completion_rate: 0 },
-    { id: 2, title: 'Comment on 3 posts', description: 'Join the conversation on the feed.', points: 15, points_reward: 15, streak_count: 0, completed_today: false, completion_rate: 0 },
-    { id: 3, title: 'Play a trivia round', description: 'Jump into a live trivia match.', points: 20, points_reward: 20, streak_count: 0, completed_today: false, completion_rate: 0 },
-    { id: 4, title: 'Share a hot take', description: 'Post an opinion for the community.', points: 5, points_reward: 5, streak_count: 0, completed_today: false, completion_rate: 0 },
-    { id: 5, title: 'Upvote a community thread', description: 'Support a useful thread or reply.', points: 5, points_reward: 5, streak_count: 0, completed_today: false, completion_rate: 0 },
-  ];
+router.get('/challenges', verifyToken, async (req, res) => {
+  try {
+    const [todayRows] = await db.query(
+      `SELECT challenge_id
+       FROM daily_challenge_completions
+       WHERE user_id = ? AND challenge_date = CURRENT_DATE()`,
+      [req.user.id]
+    );
+    const [totalRows] = await db.query(
+      `SELECT challenge_id, COUNT(*) AS total_completed
+       FROM daily_challenge_completions
+       WHERE user_id = ?
+       GROUP BY challenge_id`,
+      [req.user.id]
+    );
+    const [activeRows] = await db.query(
+      `SELECT COUNT(DISTINCT challenge_date) AS active_days
+       FROM daily_challenge_completions
+       WHERE user_id = ?`,
+      [req.user.id]
+    );
 
-  res.json({ challenges });
+    const completedTodaySet = new Set(todayRows.map((row) => Number(row.challenge_id)));
+    const totalsMap = new Map(totalRows.map((row) => [Number(row.challenge_id), Number(row.total_completed)]));
+    const activeDays = Number(activeRows?.[0]?.active_days || 0);
+
+    const challenges = DAILY_CHALLENGES.map((challenge) => {
+      const totalCompleted = totalsMap.get(challenge.id) || 0;
+      const completionRate = activeDays > 0 ? Math.round((totalCompleted / activeDays) * 100) : 0;
+      return {
+        ...challenge,
+        points_reward: challenge.points,
+        streak_count: totalCompleted,
+        completed_today: completedTodaySet.has(challenge.id),
+        completion_rate: completionRate,
+      };
+    });
+
+    res.json({ challenges });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch challenges' });
+  }
 });
 
 router.post('/challenges/:id/complete', verifyToken, async (req, res) => {
   try {
-    await awardPoints(req.user.id, 10, `challenge_${req.params.id}`);
-    res.json({ ok: true, points_awarded: 10 });
+    const challengeId = Number(req.params.id);
+    const challenge = DAILY_CHALLENGES.find((item) => item.id === challengeId);
+
+    if (!challenge) {
+      return res.status(404).json({ error: 'Challenge not found' });
+    }
+
+    const [insertResult] = await db.query(
+      `INSERT IGNORE INTO daily_challenge_completions (user_id, challenge_id, challenge_date)
+       VALUES (?, ?, CURRENT_DATE())`,
+      [req.user.id, challengeId]
+    );
+
+    const wasNewCompletion = Number(insertResult?.affectedRows || 0) > 0;
+    if (wasNewCompletion) {
+      await awardPoints(req.user.id, challenge.points, `challenge_${challengeId}`);
+    }
+
+    res.json({
+      ok: true,
+      already_completed: !wasNewCompletion,
+      points_awarded: wasNewCompletion ? challenge.points : 0,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to complete challenge' });
@@ -172,11 +240,37 @@ router.post('/photo-contest/enter', verifyToken, upload.single('media'), async (
 
 router.post('/photo-contest/vote/:entryId', verifyToken, async (req, res) => {
   try {
-    await db.query(
-      'INSERT IGNORE INTO post_reactions (post_id, user_id, emoji) VALUES (?, ?, ?)',
-      [req.params.entryId, req.user.id, '🏆']
+    const entryId = Number(req.params.entryId);
+    const [[existingVote]] = await db.query(
+      'SELECT id FROM post_reactions WHERE post_id = ? AND user_id = ? AND emoji = ?',
+      [entryId, req.user.id, '🏆']
     );
-    res.json({ ok: true });
+
+    if (existingVote) {
+      await db.query('DELETE FROM post_reactions WHERE id = ?', [existingVote.id]);
+    } else {
+      await db.query(
+        `INSERT INTO post_reactions (post_id, user_id, emoji)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE emoji = VALUES(emoji), created_at = CURRENT_TIMESTAMP`,
+        [entryId, req.user.id, '🏆']
+      );
+    }
+
+    const [[voteStats]] = await db.query(
+      `SELECT
+        COUNT(CASE WHEN emoji = '🏆' THEN 1 END) AS votes,
+        COUNT(CASE WHEN emoji = '🏆' AND user_id = ? THEN 1 END) AS user_voted
+       FROM post_reactions
+       WHERE post_id = ?`,
+      [req.user.id, entryId]
+    );
+
+    res.json({
+      ok: true,
+      voted: Number(voteStats?.user_voted || 0) > 0,
+      votes: Number(voteStats?.votes || 0),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to vote' });
@@ -260,8 +354,8 @@ async function getPhotoContestEntries(userId) {
             u.username, u.display_name,
             COALESCE(pp.name, u.display_name) AS pet_name,
             COALESCE(pp.breed, '') AS pet_breed,
-            (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id) AS votes,
-            (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id AND user_id = ?) AS user_voted
+            (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id AND emoji = '🏆') AS votes,
+            (SELECT COUNT(*) FROM post_reactions WHERE post_id = p.id AND user_id = ? AND emoji = '🏆') AS user_voted
      FROM posts p
      JOIN users u ON u.id = p.user_id
      LEFT JOIN pet_profiles pp ON pp.id = p.pet_id

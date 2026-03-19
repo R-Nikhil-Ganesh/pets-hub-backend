@@ -2,6 +2,25 @@ const router = require('express').Router();
 const db = require('../config/db');
 const { verifyToken } = require('../middleware/auth');
 const { canUserAccessCommunity } = require('../utils/communityAccess');
+const { upload, uploadStream } = require('../middleware/upload');
+
+let threadsMediaColumnReady;
+
+async function ensureThreadsMediaColumn() {
+  if (threadsMediaColumnReady !== undefined) {
+    return threadsMediaColumnReady;
+  }
+
+  const [rows] = await db.query("SHOW COLUMNS FROM threads LIKE 'media_url'");
+  if (rows.length > 0) {
+    threadsMediaColumnReady = true;
+    return true;
+  }
+
+  await db.query("ALTER TABLE threads ADD COLUMN media_url VARCHAR(512) DEFAULT '' AFTER content");
+  threadsMediaColumnReady = true;
+  return true;
+}
 
 // GET /api/threads?community_id=&page=1
 router.get('/', verifyToken, async (req, res) => {
@@ -91,7 +110,7 @@ router.get('/:id', verifyToken, async (req, res) => {
 });
 
 // POST /api/threads — create thread
-router.post('/', verifyToken, async (req, res) => {
+router.post('/', verifyToken, upload.single('media'), async (req, res) => {
   const { community_id, title, content, flair } = req.body;
   if (!community_id || !title?.trim()) return res.status(400).json({ error: 'community_id and title required' });
   try {
@@ -103,9 +122,17 @@ router.post('/', verifyToken, async (req, res) => {
       });
     }
 
+    let mediaUrl = '';
+    if (req.file) {
+      const resourceType = req.file.mimetype?.startsWith('video') ? 'video' : 'image';
+      mediaUrl = await uploadStream(req.file.buffer, 'pawprint/threads', resourceType);
+    }
+
+    await ensureThreadsMediaColumn();
+
     const [result] = await db.query(
-      'INSERT INTO threads (community_id, user_id, title, content, flair) VALUES (?, ?, ?, ?, ?)',
-      [community_id, req.user.id, title.trim(), content?.trim() || '', flair || null]
+      'INSERT INTO threads (community_id, user_id, title, content, media_url, flair) VALUES (?, ?, ?, ?, ?, ?)',
+      [community_id, req.user.id, title.trim(), content?.trim() || '', mediaUrl, flair || null]
     );
     await awardPoints(req.user.id, 10, 'created_thread');
     const [[thread]] = await db.query('SELECT * FROM threads WHERE id = ?', [result.insertId]);

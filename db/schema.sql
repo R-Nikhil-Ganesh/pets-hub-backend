@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS threads (
   user_id      INT UNSIGNED NOT NULL,
   title        VARCHAR(200) NOT NULL,
   content      TEXT,
+  media_url    VARCHAR(512) DEFAULT '',
   flair        VARCHAR(60) DEFAULT NULL,
   deleted_at   DATETIME DEFAULT NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -300,6 +301,20 @@ CREATE TABLE IF NOT EXISTS rewards (
   image_url    VARCHAR(512) DEFAULT '',
   is_active    TINYINT(1) NOT NULL DEFAULT 1,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------
+-- DAILY CHALLENGE COMPLETIONS
+-- -----------------------------------------------
+CREATE TABLE IF NOT EXISTS daily_challenge_completions (
+  id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id        INT UNSIGNED NOT NULL,
+  challenge_id   TINYINT UNSIGNED NOT NULL,
+  challenge_date DATE NOT NULL,
+  created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_daily_challenge (user_id, challenge_id, challenge_date),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_daily_challenge_user_date (user_id, challenge_date)
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------

@@ -6,6 +6,116 @@ const db = require('./config/db');
 const { canUserAccessCommunity } = require('./utils/communityAccess');
 
 let io;
+const TRIVIA_QUESTION_TIME_MS = 20 * 1000;
+const TRIVIA_POINTS_PER_CORRECT = 100;
+const TRIVIA_WIN_POINTS = 100;
+const TRIVIA_PLAY_POINTS = 20;
+const triviaSessions = new Map();
+
+async function awardPoints(userId, amount, action) {
+  await db.query(
+    `INSERT INTO user_points (user_id, total_points) VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE total_points = total_points + ?`,
+    [userId, amount, amount]
+  );
+  await db.query(
+    'INSERT INTO point_transactions (user_id, amount, action) VALUES (?, ?, ?)',
+    [userId, amount, action]
+  );
+}
+
+function clearTriviaTimer(sessionState) {
+  if (sessionState?.timer) {
+    clearTimeout(sessionState.timer);
+    sessionState.timer = null;
+  }
+}
+
+function scheduleTriviaTimeout(sessionId) {
+  const sessionState = triviaSessions.get(sessionId);
+  if (!sessionState || sessionState.finished) return;
+
+  clearTriviaTimer(sessionState);
+  sessionState.timer = setTimeout(async () => {
+    const latest = triviaSessions.get(sessionId);
+    if (!latest || latest.finished) return;
+    await advanceTriviaQuestion(sessionId, 'timeout');
+  }, TRIVIA_QUESTION_TIME_MS);
+}
+
+async function finalizeTriviaSession(sessionId) {
+  const sessionState = triviaSessions.get(sessionId);
+  if (!sessionState || sessionState.finished) return;
+
+  sessionState.finished = true;
+  clearTriviaTimer(sessionState);
+
+  const [player1Id, player2Id] = sessionState.playerIds;
+  const player1Score = Number(sessionState.scores[player1Id] || 0);
+  const player2Score = Number(sessionState.scores[player2Id] || 0);
+  const winnerId =
+    player1Score > player2Score ? player1Id : player2Score > player1Score ? player2Id : null;
+
+  try {
+    await db.query(
+      'UPDATE game_sessions SET status = ?, winner_id = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?',
+      ['finished', winnerId, sessionId]
+    );
+
+    for (const playerId of sessionState.playerIds) {
+      const pointsWon = winnerId === playerId ? TRIVIA_WIN_POINTS : TRIVIA_PLAY_POINTS;
+      await awardPoints(
+        playerId,
+        pointsWon,
+        winnerId === playerId ? 'trivia_win' : 'trivia_played'
+      );
+      await redis.zIncrBy('leaderboard:trivia', pointsWon, String(playerId));
+    }
+  } catch (err) {
+    console.error('finalizeTriviaSession error', err);
+  }
+
+  io.to(`game:${sessionId}`).emit('game:end', {
+    winner_id: winnerId,
+    scores: {
+      [player1Id]: player1Score,
+      [player2Id]: player2Score,
+    },
+  });
+
+  triviaSessions.delete(sessionId);
+}
+
+async function advanceTriviaQuestion(sessionId, reason) {
+  const sessionState = triviaSessions.get(sessionId);
+  if (!sessionState || sessionState.finished || sessionState.advancing) return;
+
+  sessionState.advancing = true;
+  clearTriviaTimer(sessionState);
+
+  try {
+    const lastQuestionIndex = sessionState.questions.length - 1;
+    if (sessionState.currentQuestion >= lastQuestionIndex) {
+      await finalizeTriviaSession(sessionId);
+      return;
+    }
+
+    sessionState.currentQuestion += 1;
+    sessionState.answeredBy = new Set();
+
+    io.to(`game:${sessionId}`).emit('game:question', {
+      current_question: sessionState.currentQuestion,
+      reason,
+    });
+
+    scheduleTriviaTimeout(sessionId);
+  } finally {
+    const latest = triviaSessions.get(sessionId);
+    if (latest) {
+      latest.advancing = false;
+    }
+  }
+}
 
 function toObjectIdString(value) {
   if (!value) return null;
@@ -267,13 +377,37 @@ function initSocket(server) {
     });
 
     // --- Trivia game ---
-    socket.on('game:answer', (data) => {
-      // Broadcast score update to match participants
-      if (data.session_id) {
-        io.to(`game:${data.session_id}`).emit('game:score', {
-          user_id: userId,
-          score: data.score,
-        });
+    socket.on('game:answer', async (data = {}) => {
+      const sessionId = Number(data.session_id);
+      const questionIndex = Number(data.question_index);
+      const choiceIndex = Number(data.choice_index);
+      if (!Number.isFinite(sessionId) || !Number.isFinite(questionIndex) || !Number.isFinite(choiceIndex)) {
+        return;
+      }
+
+      const sessionState = triviaSessions.get(sessionId);
+      if (!sessionState || sessionState.finished) return;
+      if (!sessionState.playerIds.includes(userId)) return;
+      if (sessionState.currentQuestion !== questionIndex) return;
+      if (sessionState.answeredBy.has(userId)) return;
+
+      const question = sessionState.questions[sessionState.currentQuestion];
+      if (!question) return;
+
+      const isCorrect = choiceIndex === Number(question.correct_index);
+      if (isCorrect) {
+        sessionState.scores[userId] = Number(sessionState.scores[userId] || 0) + TRIVIA_POINTS_PER_CORRECT;
+      }
+
+      sessionState.answeredBy.add(userId);
+
+      io.to(`game:${sessionId}`).emit('game:score', {
+        user_id: userId,
+        score: Number(sessionState.scores[userId] || 0),
+      });
+
+      if (sessionState.answeredBy.size >= sessionState.playerIds.length) {
+        await advanceTriviaQuestion(sessionId, 'all_answered');
       }
     });
 
@@ -301,7 +435,7 @@ function initSocket(server) {
       await subscriber.subscribe('game:start', (message) => {
         try {
           const data = JSON.parse(message);
-          const { session_id, player1_id, player2_id, questions } = data;
+          const { session_id, player1_id, player2_id, player1, player2, questions } = data;
 
           const formatQuestions = questions.map((q) => ({
             id: q.id,
@@ -312,14 +446,35 @@ function initSocket(server) {
             category: q.category,
           }));
 
+          const sessionId = Number(session_id);
+          const player1Id = Number(player1_id);
+          const player2Id = Number(player2_id);
+          triviaSessions.set(sessionId, {
+            sessionId,
+            playerIds: [player1Id, player2Id],
+            questions: formatQuestions,
+            currentQuestion: 0,
+            scores: {
+              [player1Id]: 0,
+              [player2Id]: 0,
+            },
+            answeredBy: new Set(),
+            timer: null,
+            finished: false,
+            advancing: false,
+          });
+          scheduleTriviaTimeout(sessionId);
+
           io.sockets.sockets.forEach((s) => {
             if (s.user?.id === player1_id || s.user?.id === player2_id) {
               const opponentId = s.user.id === player1_id ? player2_id : player1_id;
+              const opponent = s.user.id === player1_id ? (player2 || { id: opponentId }) : (player1 || { id: opponentId });
               s.join(`game:${session_id}`);
               s.emit('game:start', {
                 session_id,
-                opponent: { id: opponentId },
+                opponent,
                 questions: formatQuestions,
+                current_question: 0,
               });
             }
           });
