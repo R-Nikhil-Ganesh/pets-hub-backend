@@ -67,6 +67,23 @@ router.delete('/trivia/queue', verifyToken, async (req, res) => {
 router.post('/trivia/:sessionId/end', verifyToken, async (req, res) => {
   const { winner_id } = req.body;
   try {
+    const [[session]] = await db.query(
+      'SELECT id, status, player1_id, player2_id FROM game_sessions WHERE id = ?',
+      [req.params.sessionId]
+    );
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (session.player1_id !== req.user.id && session.player2_id !== req.user.id) {
+      return res.status(403).json({ error: 'Not a session participant' });
+    }
+
+    if (session.status === 'finished') {
+      return res.json({ ok: true, already_finished: true, points_awarded: 0 });
+    }
+
     await db.query('UPDATE game_sessions SET status = ?, winner_id = ? WHERE id = ?', [
       'finished',
       winner_id || null,
