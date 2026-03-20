@@ -28,6 +28,7 @@ app.use('/api/posts', require('./routes/posts'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/stories', require('./routes/stories'));
 app.use('/api/hot-takes', require('./routes/hotTakes'));
+app.use('/api/event-groups', require('./routes/eventGroups'));
 app.use('/api/communities', require('./routes/communities'));
 app.use('/api/threads', require('./routes/threads'));
 app.use('/api/chat', require('./routes/chat'));

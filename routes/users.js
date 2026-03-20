@@ -8,13 +8,19 @@ const { upload, uploadStream } = require('../middleware/upload');
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT u.*, COALESCE(up.total_points, 0) AS points FROM users u
-       LEFT JOIN user_points up ON up.user_id = u.id WHERE u.id = ?`,
+      `SELECT u.*, COALESCE(up.total_points, 0) AS points,
+              (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS follower_count_live,
+              (SELECT COUNT(*) FROM follows WHERE follower_id = u.id) AS following_count_live
+       FROM users u
+       LEFT JOIN user_points up ON up.user_id = u.id
+       WHERE u.id = ?`,
       [req.user.id]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     const [pets] = await db.query('SELECT * FROM pet_profiles WHERE user_id = ?', [req.user.id]);
-    const { password_hash, ...user } = rows[0];
+    const { password_hash, follower_count_live, following_count_live, ...user } = rows[0];
+    user.follower_count = Number(follower_count_live);
+    user.following_count = Number(following_count_live);
     res.json({ user: { ...user, pet_profiles: pets } });
   } catch (err) {
     console.error(err);
@@ -66,11 +72,17 @@ router.put('/me', verifyToken, upload.single('avatar'), async (req, res) => {
     await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, vals);
 
     const [rows] = await db.query(
-      `SELECT u.*, COALESCE(up.total_points, 0) AS points FROM users u
-       LEFT JOIN user_points up ON up.user_id = u.id WHERE u.id = ?`,
+      `SELECT u.*, COALESCE(up.total_points, 0) AS points,
+              (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS follower_count_live,
+              (SELECT COUNT(*) FROM follows WHERE follower_id = u.id) AS following_count_live
+       FROM users u
+       LEFT JOIN user_points up ON up.user_id = u.id
+       WHERE u.id = ?`,
       [req.user.id]
     );
-    const { password_hash, ...user } = rows[0];
+    const { password_hash, follower_count_live, following_count_live, ...user } = rows[0];
+    user.follower_count = Number(follower_count_live);
+    user.following_count = Number(following_count_live);
     res.json({ user });
   } catch (err) {
     console.error(err);
@@ -131,18 +143,161 @@ router.get('/:id/posts', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/:id/followers
+router.get('/:id/followers', verifyToken, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isFinite(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  const offset = (page - 1) * limit;
+
+  try {
+    const [[targetUser]] = await db.query(
+      'SELECT id, username, display_name FROM users WHERE id = ? LIMIT 1',
+      [targetId]
+    );
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    const [rows] = await db.query(
+      `SELECT u.id, u.username, u.display_name, u.avatar_url,
+              u.is_professional, u.professional_type,
+              (SELECT COUNT(*) FROM follows rel
+               WHERE rel.follower_id = ? AND rel.following_id = u.id) AS is_following
+       FROM follows f
+       JOIN users u ON u.id = f.follower_id
+       WHERE f.following_id = ?
+       ORDER BY f.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [req.user.id, targetId, limit + 1, offset]
+    );
+
+    const has_more = rows.length > limit;
+    const users = rows.slice(0, limit).map((row) => ({
+      id: row.id,
+      username: row.username,
+      display_name: row.display_name,
+      avatar_url: row.avatar_url,
+      is_professional: Boolean(row.is_professional),
+      professional_type: row.professional_type,
+      is_following: Number(row.is_following) > 0,
+    }));
+
+    res.json({
+      users,
+      page,
+      has_more,
+      target_user: targetUser,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch followers' });
+  }
+});
+
+// GET /api/users/:id/following
+router.get('/:id/following', verifyToken, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isFinite(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  const offset = (page - 1) * limit;
+
+  try {
+    const [[targetUser]] = await db.query(
+      'SELECT id, username, display_name FROM users WHERE id = ? LIMIT 1',
+      [targetId]
+    );
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    const [rows] = await db.query(
+      `SELECT u.id, u.username, u.display_name, u.avatar_url,
+              u.is_professional, u.professional_type,
+              (SELECT COUNT(*) FROM follows rel
+               WHERE rel.follower_id = ? AND rel.following_id = u.id) AS is_following
+       FROM follows f
+       JOIN users u ON u.id = f.following_id
+       WHERE f.follower_id = ?
+       ORDER BY f.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [req.user.id, targetId, limit + 1, offset]
+    );
+
+    const has_more = rows.length > limit;
+    const users = rows.slice(0, limit).map((row) => ({
+      id: row.id,
+      username: row.username,
+      display_name: row.display_name,
+      avatar_url: row.avatar_url,
+      is_professional: Boolean(row.is_professional),
+      professional_type: row.professional_type,
+      is_following: Number(row.is_following) > 0,
+    }));
+
+    res.json({
+      users,
+      page,
+      has_more,
+      target_user: targetUser,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch following list' });
+  }
+});
+
 // POST /api/users/:id/follow
 router.post('/:id/follow', verifyToken, async (req, res) => {
   const targetId = Number(req.params.id);
+  if (!Number.isFinite(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
   if (targetId === req.user.id) return res.status(400).json({ error: 'Cannot follow yourself' });
   try {
-    await db.query('INSERT IGNORE INTO follows (follower_id, following_id) VALUES (?, ?)', [
+    const [[targetUser]] = await db.query('SELECT id FROM users WHERE id = ? LIMIT 1', [targetId]);
+    if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+    const [insertResult] = await db.query('INSERT IGNORE INTO follows (follower_id, following_id) VALUES (?, ?)', [
       req.user.id,
       targetId,
     ]);
-    // Points reward for first follow
-    await awardPoints(req.user.id, 5, 'followed_someone');
-    res.json({ ok: true });
+
+    if (insertResult.affectedRows > 0) {
+      await db.query(
+        `UPDATE users
+         SET following_count = (SELECT COUNT(*) FROM follows WHERE follower_id = ?)
+         WHERE id = ?`,
+        [req.user.id, req.user.id]
+      );
+      await db.query(
+        `UPDATE users
+         SET follower_count = (SELECT COUNT(*) FROM follows WHERE following_id = ?)
+         WHERE id = ?`,
+        [targetId, targetId]
+      );
+
+      // Points reward for first follow
+      await awardPoints(req.user.id, 5, 'followed_someone');
+    }
+
+    const [[counts]] = await db.query(
+      `SELECT
+         (SELECT COUNT(*) FROM follows WHERE following_id = ?) AS follower_count,
+         (SELECT COUNT(*) FROM follows WHERE follower_id = ?) AS following_count`,
+      [targetId, req.user.id]
+    );
+
+    res.json({
+      ok: true,
+      is_following: true,
+      target_follower_count: Number(counts.follower_count),
+      actor_following_count: Number(counts.following_count),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Follow failed' });
@@ -152,12 +307,43 @@ router.post('/:id/follow', verifyToken, async (req, res) => {
 // DELETE /api/users/:id/follow
 router.delete('/:id/follow', verifyToken, async (req, res) => {
   const targetId = Number(req.params.id);
+  if (!Number.isFinite(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
   try {
-    await db.query('DELETE FROM follows WHERE follower_id = ? AND following_id = ?', [
+    const [deleteResult] = await db.query('DELETE FROM follows WHERE follower_id = ? AND following_id = ?', [
       req.user.id,
       targetId,
     ]);
-    res.json({ ok: true });
+
+    if (deleteResult.affectedRows > 0) {
+      await db.query(
+        `UPDATE users
+         SET following_count = (SELECT COUNT(*) FROM follows WHERE follower_id = ?)
+         WHERE id = ?`,
+        [req.user.id, req.user.id]
+      );
+      await db.query(
+        `UPDATE users
+         SET follower_count = (SELECT COUNT(*) FROM follows WHERE following_id = ?)
+         WHERE id = ?`,
+        [targetId, targetId]
+      );
+    }
+
+    const [[counts]] = await db.query(
+      `SELECT
+         (SELECT COUNT(*) FROM follows WHERE following_id = ?) AS follower_count,
+         (SELECT COUNT(*) FROM follows WHERE follower_id = ?) AS following_count`,
+      [targetId, req.user.id]
+    );
+
+    res.json({
+      ok: true,
+      is_following: false,
+      target_follower_count: Number(counts.follower_count),
+      actor_following_count: Number(counts.following_count),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Unfollow failed' });

@@ -94,6 +94,55 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/communities/:id/members
+router.get('/:id/members', verifyToken, async (req, res) => {
+  const communityId = Number(req.params.id);
+  if (!Number.isFinite(communityId) || communityId <= 0) {
+    return res.status(400).json({ error: 'Invalid community id' });
+  }
+
+  try {
+    const access = await canUserAccessCommunity(req.user.id, communityId);
+    if (!access.exists) return res.status(404).json({ error: 'Community not found' });
+    if (!access.allowed) {
+      return res.status(403).json({
+        error: `Access denied: this community requires a ${access.requiredSpecies} pet profile`,
+      });
+    }
+
+    const [[communityRow]] = await db.query(
+      `SELECT c.*,
+              (SELECT COUNT(*) FROM community_members WHERE community_id = c.id) AS member_count,
+              (SELECT COUNT(*) FROM community_members WHERE community_id = c.id AND user_id = ?) AS is_member
+       FROM communities c WHERE c.id = ?`,
+      [req.user.id, communityId]
+    );
+
+    if (!communityRow) return res.status(404).json({ error: 'Community not found' });
+
+    const [members] = await db.query(
+      `SELECT u.id, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type
+       FROM community_members cm
+       JOIN users u ON u.id = cm.user_id
+       WHERE cm.community_id = ?
+       ORDER BY cm.joined_at DESC, u.id DESC
+       LIMIT 200`,
+      [communityId]
+    );
+
+    res.json({
+      community: shapeCommunity(communityRow),
+      members: members.map((member) => ({
+        ...member,
+        is_professional: Number(member.is_professional) > 0,
+      })),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch community members' });
+  }
+});
+
 // POST /api/communities/:id/join
 router.post('/:id/join', verifyToken, async (req, res) => {
   try {

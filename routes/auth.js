@@ -61,11 +61,15 @@ router.post(
       }
 
       const [rows] = await db.query(
-        `SELECT u.*, COALESCE(up.total_points, 0) AS points FROM users u
-         LEFT JOIN user_points up ON up.user_id = u.id WHERE u.id = ?`,
+        `SELECT u.*, COALESCE(up.total_points, 0) AS points,
+          (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS follower_count_live,
+          (SELECT COUNT(*) FROM follows WHERE follower_id = u.id) AS following_count_live
+         FROM users u
+         LEFT JOIN user_points up ON up.user_id = u.id
+         WHERE u.id = ?`,
         [userId]
       );
-      const user = sanitizeUser(rows[0]);
+            const user = sanitizeUser(rows[0]);
       const token = sign({ id: userId, username });
 
       res.status(201).json({ user, token });
@@ -88,7 +92,10 @@ router.post(
 
     try {
       const [rows] = await db.query(
-        `SELECT u.*, COALESCE(up.total_points, 0) AS points FROM users u
+        `SELECT u.*, COALESCE(up.total_points, 0) AS points,
+          (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS follower_count_live,
+          (SELECT COUNT(*) FROM follows WHERE follower_id = u.id) AS following_count_live
+         FROM users u
          LEFT JOIN user_points up ON up.user_id = u.id
          WHERE u.email = ? LIMIT 1`,
         [email]
@@ -113,7 +120,14 @@ router.post(
 );
 
 function sanitizeUser(row) {
-  const { password_hash, ...safe } = row;
+  const {
+    password_hash,
+    follower_count_live,
+    following_count_live,
+    ...safe
+  } = row;
+  if (follower_count_live !== undefined) safe.follower_count = Number(follower_count_live);
+  if (following_count_live !== undefined) safe.following_count = Number(following_count_live);
   return safe;
 }
 

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS follows (
   following_id INT UNSIGNED NOT NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (follower_id, following_id),
+  INDEX idx_follows_following_id (following_id),
   FOREIGN KEY (follower_id)  REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (following_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -335,6 +336,39 @@ CREATE TABLE IF NOT EXISTS events (
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (organizer_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_events_starts (starts_at)
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------
+-- EVENT GROUPS
+-- -----------------------------------------------
+CREATE TABLE IF NOT EXISTS event_groups (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  event_id     VARCHAR(40) NOT NULL,
+  event_title  VARCHAR(200) NOT NULL,
+  creator_id   INT UNSIGNED NOT NULL,
+  name         VARCHAR(120) NOT NULL,
+  community_id INT UNSIGNED DEFAULT NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (creator_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (community_id) REFERENCES communities(id) ON DELETE SET NULL,
+  INDEX idx_event_groups_creator (creator_id),
+  INDEX idx_event_groups_community (community_id)
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------
+-- EVENT GROUP REQUESTS
+-- -----------------------------------------------
+CREATE TABLE IF NOT EXISTS event_group_requests (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  group_id     INT UNSIGNED NOT NULL,
+  invitee_id   INT UNSIGNED NOT NULL,
+  status       ENUM('pending','accepted','declined') NOT NULL DEFAULT 'pending',
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  responded_at DATETIME DEFAULT NULL,
+  UNIQUE KEY uq_event_group_invitee (group_id, invitee_id),
+  INDEX idx_event_group_requests_invitee (invitee_id, status),
+  FOREIGN KEY (group_id) REFERENCES event_groups(id) ON DELETE CASCADE,
+  FOREIGN KEY (invitee_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------

@@ -42,7 +42,11 @@ router.get('/', verifyToken, async (req, res) => {
               u.is_professional, u.professional_type,
               (SELECT SUM(is_upvote) FROM thread_upvotes WHERE thread_id = t.id) AS upvote_count,
               (SELECT COUNT(*) FROM thread_replies WHERE thread_id = t.id AND deleted_at IS NULL) AS reply_count,
-              (SELECT is_upvote FROM thread_upvotes WHERE thread_id = t.id AND user_id = ?) AS user_voted
+              (SELECT tu.is_upvote
+                 FROM thread_upvotes tu
+                WHERE tu.thread_id = t.id AND tu.user_id = ?
+                ORDER BY tu.id DESC
+                LIMIT 1) AS user_voted
        FROM threads t JOIN users u ON u.id = t.user_id
        WHERE t.community_id = ? AND t.deleted_at IS NULL
        ORDER BY upvote_count DESC, t.created_at DESC
@@ -65,7 +69,11 @@ router.get('/:id', verifyToken, async (req, res) => {
       `SELECT t.*, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type,
               (SELECT SUM(is_upvote) FROM thread_upvotes WHERE thread_id = t.id) AS upvote_count,
               (SELECT COUNT(*) FROM thread_replies WHERE thread_id = t.id AND deleted_at IS NULL) AS reply_count,
-              (SELECT is_upvote FROM thread_upvotes WHERE thread_id = t.id AND user_id = ?) AS user_voted
+              (SELECT tu.is_upvote
+                 FROM thread_upvotes tu
+                WHERE tu.thread_id = t.id AND tu.user_id = ?
+                ORDER BY tu.id DESC
+                LIMIT 1) AS user_voted
        FROM threads t JOIN users u ON u.id = t.user_id WHERE t.id = ?`,
       [req.user.id, req.params.id]
     );
@@ -81,7 +89,11 @@ router.get('/:id', verifyToken, async (req, res) => {
     const [replies] = await db.query(
       `SELECT r.*, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type,
               (SELECT SUM(is_upvote) FROM thread_upvotes WHERE reply_id = r.id) AS upvote_count,
-              (SELECT is_upvote FROM thread_upvotes WHERE reply_id = r.id AND user_id = ?) AS user_voted
+              (SELECT tu.is_upvote
+                 FROM thread_upvotes tu
+                WHERE tu.reply_id = r.id AND tu.user_id = ?
+                ORDER BY tu.id DESC
+                LIMIT 1) AS user_voted
        FROM thread_replies r JOIN users u ON u.id = r.user_id
        WHERE r.thread_id = ? AND r.deleted_at IS NULL
        ORDER BY r.created_at ASC`,
