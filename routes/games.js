@@ -6,11 +6,11 @@ const { upload, uploadStream } = require('../middleware/upload');
 
 const TRIVIA_QUEUE_KEY = 'trivia:queue';
 const DAILY_CHALLENGES = [
-  { id: 1, title: 'Post a photo of your pet', description: 'Share one new post today.', points: 10 },
-  { id: 2, title: 'Comment on 3 posts', description: 'Join the conversation on the feed.', points: 15 },
-  { id: 3, title: 'Play a trivia round', description: 'Jump into a live trivia match.', points: 20 },
-  { id: 4, title: 'Share a hot take', description: 'Post an opinion for the community.', points: 5 },
-  { id: 5, title: 'Upvote a community thread', description: 'Support a useful thread or reply.', points: 5 },
+  { id: 1, title: 'Play with your pet', description: 'Spend 10+ minutes in active play time.', points: 5 },
+  { id: 2, title: 'Quick grooming check', description: 'Brush coat or wipe paws and ears.', points: 5 },
+  { id: 3, title: 'Hydration check', description: 'Refill water bowl and confirm fresh water.', points: 5 },
+  { id: 4, title: 'Training reps', description: 'Practice one command for 5 reps.', points: 5 },
+  { id: 5, title: 'Photo moment', description: 'Capture one photo memory today.', points: 5 },
 ];
 
 router.post('/trivia/queue', verifyToken, async (req, res) => {
