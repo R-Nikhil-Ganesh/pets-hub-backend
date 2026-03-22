@@ -41,10 +41,10 @@ router.get('/events', verifyToken, async (req, res) => {
   try {
     // Fetch groups created by user
     const [createdGroupRows] = await db.query(
-      `SELECT id, event_id, name, community_id, created_at
-       FROM event_groups
-       WHERE creator_id = ?
-       ORDER BY created_at DESC`,
+      `SELECT g.id, g.event_id, g.name, g.community_id, g.created_at, g.creator_id
+       FROM event_groups g
+       WHERE g.creator_id = ?
+       ORDER BY g.created_at DESC`,
       [req.user.id]
     );
 
@@ -291,6 +291,13 @@ router.post('/', verifyToken, async (req, res) => {
 
     const groupId = Number(groupInsert.insertId);
 
+    // Automatically add creator as accepted member
+    await connection.query(
+      `INSERT IGNORE INTO event_group_requests (group_id, invitee_id, status)
+       VALUES (?, ?, 'accepted')`,
+      [groupId, req.user.id]
+    );
+
     for (const inviteeId of inviteeIds) {
       const [requestInsert] = await connection.query(
         `INSERT INTO event_group_requests (group_id, invitee_id, status)
@@ -383,23 +390,38 @@ router.post('/requests/:id/respond', verifyToken, async (req, res) => {
     let communityId = request.community_id ? Number(request.community_id) : null;
 
     if (!communityId) {
-      const communityName = `Event Crew: ${request.group_name || request.event_title}`.slice(0, 80);
-      const [communityInsert] = await connection.query(
-        `INSERT INTO communities (name, description, type, icon_emoji, is_default)
-         VALUES (?, ?, 'topic', ?, 0)`,
-        [
-          communityName,
-          `Private event group for ${request.event_title}.`,
-          '🎉',
-        ]
+      // Check if a community with the event title already exists
+      const [[existingCommunity]] = await connection.query(
+        `SELECT id FROM communities WHERE name = ? LIMIT 1`,
+        [request.event_title]
       );
 
-      communityId = Number(communityInsert.insertId);
+      if (existingCommunity) {
+        communityId = Number(existingCommunity.id);
+        await connection.query(
+          'UPDATE event_groups SET community_id = ? WHERE id = ?',
+          [communityId, request.group_id]
+        );
+      } else {
+        // Create new community if none exists
+        const communityName = `Event Crew: ${request.group_name || request.event_title}`.slice(0, 80);
+        const [communityInsert] = await connection.query(
+          `INSERT INTO communities (name, description, type, icon_emoji, is_default)
+           VALUES (?, ?, 'topic', ?, 0)`,
+          [
+            communityName,
+            `Private event group for ${request.event_title}.`,
+            '🎉',
+          ]
+        );
 
-      await connection.query(
-        'UPDATE event_groups SET community_id = ? WHERE id = ?',
-        [communityId, request.group_id]
-      );
+        communityId = Number(communityInsert.insertId);
+
+        await connection.query(
+          'UPDATE event_groups SET community_id = ? WHERE id = ?',
+          [communityId, request.group_id]
+        );
+      }
     }
 
     await connection.query(

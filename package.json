@@ -5,7 +5,9 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "seed:users": "node scripts/seedUsersWithPets.js",
+    "seed:content": "node scripts/resetAndSeedContent.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

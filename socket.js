@@ -416,7 +416,24 @@ function initSocket(server) {
     });
 
     socket.on('disconnect', () => {
-      // Clean up game rooms if needed — handled per session lifecycle
+      // Clean up empty Event Crew communities when user leaves
+      (async () => {
+        try {
+          const [communities] = await db.query(
+            `SELECT c.id FROM communities c
+             WHERE c.name LIKE 'Event Crew:%'
+             AND (SELECT COUNT(*) FROM community_members WHERE community_id = c.id) = 0`
+          );
+          
+          if (communities && communities.length > 0) {
+            for (const comm of communities) {
+              await db.query('DELETE FROM communities WHERE id = ?', [comm.id]);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to clean up empty Event Crew communities:', err);
+        }
+      })();
     });
   });
 
