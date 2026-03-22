@@ -39,6 +39,12 @@ router.post(
       );
       const userId = result.insertId;
 
+      const defaultAvatarUrl = `https://api.dicebear.com/7.x/pixel-art/png?seed=user-${userId}`;
+      await db.query('UPDATE users SET avatar_url = ? WHERE id = ? AND (avatar_url IS NULL OR TRIM(avatar_url) = "")', [
+        defaultAvatarUrl,
+        userId,
+      ]);
+
       // Award registration points
       await db.query(
         `INSERT INTO user_points (user_id, total_points) VALUES (?, 50)

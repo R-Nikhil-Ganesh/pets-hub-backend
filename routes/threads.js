@@ -40,7 +40,14 @@ router.get('/', verifyToken, async (req, res) => {
     const [threads] = await db.query(
       `SELECT t.*, u.username, u.display_name, u.avatar_url,
               u.is_professional, u.professional_type,
-              (SELECT SUM(is_upvote) FROM thread_upvotes WHERE thread_id = t.id) AS upvote_count,
+              (SELECT COALESCE(SUM(v.is_upvote), 0)
+                 FROM thread_upvotes v
+                 JOIN (
+                   SELECT user_id, MAX(id) AS latest_id
+                   FROM thread_upvotes
+                   WHERE thread_id = t.id
+                   GROUP BY user_id
+                 ) latest ON latest.latest_id = v.id) AS upvote_count,
               (SELECT COUNT(*) FROM thread_replies WHERE thread_id = t.id AND deleted_at IS NULL) AS reply_count,
               (SELECT tu.is_upvote
                  FROM thread_upvotes tu
@@ -67,7 +74,14 @@ router.get('/:id', verifyToken, async (req, res) => {
   try {
     const [[thread]] = await db.query(
       `SELECT t.*, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type,
-              (SELECT SUM(is_upvote) FROM thread_upvotes WHERE thread_id = t.id) AS upvote_count,
+              (SELECT COALESCE(SUM(v.is_upvote), 0)
+                 FROM thread_upvotes v
+                 JOIN (
+                   SELECT user_id, MAX(id) AS latest_id
+                   FROM thread_upvotes
+                   WHERE thread_id = t.id
+                   GROUP BY user_id
+                 ) latest ON latest.latest_id = v.id) AS upvote_count,
               (SELECT COUNT(*) FROM thread_replies WHERE thread_id = t.id AND deleted_at IS NULL) AS reply_count,
               (SELECT tu.is_upvote
                  FROM thread_upvotes tu
@@ -88,7 +102,14 @@ router.get('/:id', verifyToken, async (req, res) => {
 
     const [replies] = await db.query(
       `SELECT r.*, u.username, u.display_name, u.avatar_url, u.is_professional, u.professional_type,
-              (SELECT SUM(is_upvote) FROM thread_upvotes WHERE reply_id = r.id) AS upvote_count,
+              (SELECT COALESCE(SUM(v.is_upvote), 0)
+                 FROM thread_upvotes v
+                 JOIN (
+                   SELECT user_id, MAX(id) AS latest_id
+                   FROM thread_upvotes
+                   WHERE reply_id = r.id
+                   GROUP BY user_id
+                 ) latest ON latest.latest_id = v.id) AS upvote_count,
               (SELECT tu.is_upvote
                  FROM thread_upvotes tu
                 WHERE tu.reply_id = r.id AND tu.user_id = ?
@@ -216,12 +237,35 @@ router.post('/:id/vote', verifyToken, async (req, res) => {
       }
     }
 
-    const id = reply_id ?? req.params.id;
-    await db.query(
-      `INSERT INTO thread_upvotes (thread_id, reply_id, user_id, is_upvote) VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE is_upvote = ?`,
-      [reply_id ? null : id, reply_id ?? null, req.user.id, is_upvote ? 1 : 0, is_upvote ? 1 : 0]
-    );
+    const voteValue = is_upvote ? 1 : 0;
+
+    if (reply_id) {
+      const [updateResult] = await db.query(
+        'UPDATE thread_upvotes SET is_upvote = ?, created_at = NOW() WHERE reply_id = ? AND user_id = ?',
+        [voteValue, reply_id, req.user.id]
+      );
+
+      if (!updateResult.affectedRows) {
+        await db.query(
+          'INSERT INTO thread_upvotes (thread_id, reply_id, user_id, is_upvote) VALUES (?, ?, ?, ?)',
+          [null, reply_id, req.user.id, voteValue]
+        );
+      }
+    } else {
+      const threadId = Number(req.params.id);
+      const [updateResult] = await db.query(
+        'UPDATE thread_upvotes SET is_upvote = ?, created_at = NOW() WHERE thread_id = ? AND user_id = ?',
+        [voteValue, threadId, req.user.id]
+      );
+
+      if (!updateResult.affectedRows) {
+        await db.query(
+          'INSERT INTO thread_upvotes (thread_id, reply_id, user_id, is_upvote) VALUES (?, ?, ?, ?)',
+          [threadId, null, req.user.id, voteValue]
+        );
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error(err);

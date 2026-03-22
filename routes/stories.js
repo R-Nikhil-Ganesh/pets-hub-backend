@@ -12,10 +12,13 @@ router.get('/', verifyToken, async (req, res) => {
               (SELECT COUNT(*) FROM story_views sv WHERE sv.story_id = s.id AND sv.user_id = ?) AS viewed
        FROM stories s
        JOIN users u ON u.id = s.user_id
+       LEFT JOIN follows f ON f.following_id = s.user_id AND f.follower_id = ?
        LEFT JOIN pet_profiles pp ON pp.id = s.pet_id
-       WHERE s.deleted_at IS NULL AND s.expires_at > NOW()
-       ORDER BY u.id = ? DESC, s.created_at DESC`,
-      [req.user.id, req.user.id]
+       WHERE s.deleted_at IS NULL
+         AND s.expires_at > NOW()
+         AND (s.user_id = ? OR f.following_id IS NOT NULL)
+       ORDER BY s.user_id = ? DESC, s.created_at DESC`,
+      [req.user.id, req.user.id, req.user.id, req.user.id]
     );
     res.json({
       stories: stories.map((s) => ({
