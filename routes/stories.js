@@ -3,11 +3,39 @@ const db = require('../config/db');
 const { verifyToken } = require('../middleware/auth');
 const { upload, uploadStream } = require('../middleware/upload');
 
+const NIKHIL_EMAIL = 'nikhil@gmail.com';
+const NIKHIL_USERNAME = 'nikhil';
+const IMMORTAL_STORY_DISPLAY_NAMES = [
+  'Emma Smith',
+  'Nora Thomas',
+  'Logan Brown',
+  'James Brown',
+  'Ava Wilson',
+  'Lily Clark',
+];
+
 // GET /api/stories — active (not expired) stories grouped by user
 router.get('/', verifyToken, async (req, res) => {
   try {
+    const [[viewer]] = await db.query(
+      `SELECT email, username
+       FROM users
+       WHERE id = ?
+       LIMIT 1`,
+      [req.user.id]
+    );
+
+    const isNikhilViewer =
+      (viewer?.email || '').toLowerCase() === NIKHIL_EMAIL ||
+      (viewer?.username || '').toLowerCase() === NIKHIL_USERNAME;
+
+    const immortalsPlaceholders = IMMORTAL_STORY_DISPLAY_NAMES.map(() => '?').join(', ');
+    const expiryClause = isNikhilViewer
+      ? `(s.expires_at > NOW() OR u.display_name IN (${immortalsPlaceholders}))`
+      : `s.expires_at > NOW()`;
+
     const [stories] = await db.query(
-            `SELECT s.*, u.username, u.display_name, u.avatar_url,
+      `SELECT s.*, u.username, u.display_name, u.avatar_url,
               pp.name AS pet_name, pp.breed AS pet_breed, pp.age AS pet_age, pp.photo_url AS pet_photo_url, pp.species AS pet_species,
               (SELECT COUNT(*) FROM story_views sv WHERE sv.story_id = s.id AND sv.user_id = ?) AS viewed
        FROM stories s
@@ -15,10 +43,16 @@ router.get('/', verifyToken, async (req, res) => {
        LEFT JOIN follows f ON f.following_id = s.user_id AND f.follower_id = ?
        LEFT JOIN pet_profiles pp ON pp.id = s.pet_id
        WHERE s.deleted_at IS NULL
-         AND s.expires_at > NOW()
+         AND ${expiryClause}
          AND (s.user_id = ? OR f.following_id IS NOT NULL)
        ORDER BY s.user_id = ? DESC, s.created_at DESC`,
-      [req.user.id, req.user.id, req.user.id, req.user.id]
+      [
+        req.user.id,
+        req.user.id,
+        ...(isNikhilViewer ? IMMORTAL_STORY_DISPLAY_NAMES : []),
+        req.user.id,
+        req.user.id,
+      ]
     );
     res.json({
       stories: stories.map((s) => ({
