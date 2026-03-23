@@ -18,20 +18,22 @@ const POST_CAPTIONS = [
   'Lazy couch afternoon with my floof.',
 ];
 
-const POST_IMAGE_URLS = [
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-1&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-2&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-1&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-2&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-3&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-3&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-4&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-4&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-5&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-5&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-dog-6&scale=80',
-  'https://api.dicebear.com/7.x/shapes/png?seed=post-cat-6&scale=80',
+const DOG_POST_IMAGE_URLS = [
+  'https://www.hindisoch.com/wp-content/uploads/2019/11/Cute-Pet-Dogs-Baby-Puppy-Dog-Photos-HD-Puppy.jpg',
+  'https://www.hindisoch.com/wp-content/uploads/2019/11/Baby-White-Puppy-Dog-Cute-Pet-Dog-Puppy-Dog-Image.jpg',
+  'https://platopettreats.com/cdn/shop/articles/the-role-of-cinnamon-in-dog-snacks_20260208010501_20260208_d7b7fa38-6627-4f6b-82e1-e07df33c9378.jpg?v=1770748032&width=1080',
+  'https://hips.hearstapps.com/hmg-prod/images/cutest-dog-breed-bernese-64356a43dbcc5.jpg?crop=1.00xw:0.881xh;0,0.0815xh',
 ];
+
+const CAT_POST_IMAGE_URLS = [
+  'https://static.boredpanda.com/blog/wp-content/uploads/2025/02/472287426_1250075976269518_1242930755907757716_n-67a23348c4fdf__700.jpg',
+  'https://static.boredpanda.com/blog/wp-content/uploads/2025/02/472282067_1127824002292983_658525942484265465_n-67a233b5053d9__700.jpg',
+  'https://www.whoa.in/201604-Whoa/funny-cat-pictures-and-wallpaper.jpg',
+  'https://media.istockphoto.com/id/623368750/photo/sacred-birma-cat-in-interior.jpg?s=612x612&w=0&k=20&c=KfNi_sRwTCtXTnnUvEYVBnRg9arrA3JBC7SppRtSRzs=',
+  'https://hips.hearstapps.com/hmg-prod/images/cute-photos-of-cats-excited-1593184777.jpg?crop=1xw:1xh;center,top',
+];
+
+const POST_IMAGE_URLS = [...DOG_POST_IMAGE_URLS, ...CAT_POST_IMAGE_URLS];
 
 const COMMENT_BODIES = [
   'This is adorable.',
@@ -192,7 +194,7 @@ async function seedPostsAndComments(connection, users) {
   for (let i = 0; i < postTotal; i += 1) {
     const author = users[i % users.length];
     const caption = `${pick(POST_CAPTIONS)} #pawprint`;
-    const mediaUrl = POST_IMAGE_URLS[i % POST_IMAGE_URLS.length];
+    const mediaUrl = pick(POST_IMAGE_URLS);
 
     const [postInsert] = await connection.query(
       `INSERT INTO posts (user_id, pet_id, caption, media_url, media_type, location_name)

@@ -403,13 +403,13 @@ INSERT IGNORE INTO communities (name, description, type, icon_emoji, icon_url, i
 -- -----------------------------------------------
 INSERT IGNORE INTO trivia_questions (question, choice_a, choice_b, choice_c, choice_d, correct_index, category) VALUES
   ('How many teeth does an adult dog have?', '28', '32', '42', '36', 2, 'dogs'),
-  ('What is the normal body temperature of a cat (°F)?', '98.6', '100–102.5', '103–105', '96–98', 1, 'cats'),
+  ('What is the normal body temperature of a cat (F)?', '98.6', '100-102.5', '103-105', '96-98', 1, 'cats'),
   ('Which breed is known as the "Sausage Dog"?', 'Beagle', 'Corgi', 'Dachshund', 'Basset Hound', 2, 'dogs'),
   ('How many toes does a cat have on each front paw?', '4', '5', '6', '3', 1, 'cats'),
   ('What is a group of cats called?', 'Pack', 'Herd', 'Clowder', 'Pounce', 2, 'cats'),
   ('Which dog breed is the fastest?', 'Whippet', 'Greyhound', 'Saluki', 'Vizsla', 1, 'dogs'),
   ('A rabbit''s teeth never stop growing. True or False?', 'True', 'False', 'Only top teeth', 'Only incisors', 0, 'rabbits'),
-  ('What is the average lifespan of a domestic cat?', '5–8 years', '8–10 years', '12–18 years', '20–25 years', 2, 'cats'),
+  ('What is the average lifespan of a domestic cat?', '5-8 years', '8-10 years', '12-18 years', '20-25 years', 2, 'cats'),
   ('Which parrot is known to mimic human speech best?', 'Budgerigar', 'Cockatoo', 'African Grey', 'Amazon', 2, 'birds'),
   ('How often should you brush your dog''s teeth?', 'Monthly', 'Weekly', 'Daily', 'Never', 2, 'dogs');
 

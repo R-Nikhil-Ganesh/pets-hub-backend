@@ -12,6 +12,17 @@ const TRIVIA_WIN_POINTS = 100;
 const TRIVIA_PLAY_POINTS = 20;
 const triviaSessions = new Map();
 
+function sanitizeTriviaText(value, fallback = '') {
+  const normalized = String(value ?? '')
+    .replace(/\uFFFD/g, '')
+    .replace(/[–—]/g, '-')
+    .replace(/(\d)\?{2,}(\d)/g, '$1-$2')
+    .replace(/\?{3,}/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return normalized || fallback;
+}
+
 async function awardPoints(userId, amount, action) {
   await db.query(
     `INSERT INTO user_points (user_id, total_points) VALUES (?, ?)
@@ -456,8 +467,13 @@ function initSocket(server) {
 
           const formatQuestions = questions.map((q) => ({
             id: q.id,
-            question: q.question,
-            options: [q.choice_a, q.choice_b, q.choice_c, q.choice_d],
+            question: sanitizeTriviaText(q.question, 'Trivia question'),
+            options: [
+              sanitizeTriviaText(q.choice_a, 'Option A'),
+              sanitizeTriviaText(q.choice_b, 'Option B'),
+              sanitizeTriviaText(q.choice_c, 'Option C'),
+              sanitizeTriviaText(q.choice_d, 'Option D'),
+            ],
             correct_index: q.correct_index,
             time_limit: 20,
             category: q.category,
