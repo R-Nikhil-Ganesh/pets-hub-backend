@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const { initMongo } = require('./config/mongo');
 const { initRedis } = require('./config/redis');
 const { initCron } = require('./cron/storyExpiry');
+const { initKeepalive } = require('./cron/keepalive');
 const { initSocket } = require('./socket');
 
 const app = express();
@@ -55,6 +56,7 @@ const PORT = process.env.PORT || 3001;
   await initRedis();
   initSocket(server);
   initCron();
+  initKeepalive();
   server.listen(PORT, () => console.log(`Pawprint API running on port ${PORT}`));
 })();
 
