@@ -13,12 +13,18 @@ const app = express();
 const server = http.createServer(app);
 
 // --- Middleware ---
+app.set('trust proxy', 1); // Trust the first proxy (Onrender/load balancer) for accurate client IP detection
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  keyGenerator: (req) => req.ip, // Uses X-Forwarded-For when trust proxy is set
+  skip: (req) => req.ip === '127.0.0.1' || req.ip === '::1', // Skip localhost
+});
 app.use('/api', limiter);
 
 // --- Routes ---
